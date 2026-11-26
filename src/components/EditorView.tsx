@@ -664,7 +664,7 @@ export function EditorView({
             className="inline-flex items-center justify-center gap-2 min-h-12 px-4 rounded-xl border border-stone-300 bg-white text-stone-800 text-sm font-bold hover:bg-stone-50 active:scale-[0.98] transition-all"
           >
             <PrinterIcon className="w-4 h-4" />
-            <span>印刷 / スクショ画面へ</span>
+            <span>印刷 / 画像保存へ</span>
           </button>
           <button
             type="button"

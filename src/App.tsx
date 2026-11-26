@@ -57,7 +57,6 @@ export default function App() {
   const [shareError, setShareError] = useState<string | null>(null);
   const [checksKey, setChecksKey] = useState<string>('draft-preview');
   const [storageError, setStorageError] = useState<boolean>(false);
-  const [screenshotMode, setScreenshotMode] = useState<boolean>(false);
 
   const syncFromLocation = useCallback(() => {
     const hash = window.location.hash;
@@ -104,9 +103,6 @@ export default function App() {
 
   useEffect(() => {
     window.scrollTo(0, 0);
-    if (viewMode !== 'print') {
-      setScreenshotMode(false);
-    }
   }, [viewMode]);
 
   const handleSelectStarter = (starter: 'infant' | 'toddler' | 'empty') => {
@@ -190,61 +186,58 @@ export default function App() {
   };
 
   const tabs = source === 'shared' ? SHARED_TABS : DRAFT_TABS;
-  const hideHeader = screenshotMode && viewMode === 'print';
 
   return (
     <div className="min-h-dvh bg-stone-50 text-stone-900 print:bg-white">
-      {!hideHeader ? (
-        <header className="bg-slate-800 text-white print:hidden sticky top-0 z-20 shadow-xs">
-          <div className="max-w-4xl mx-auto px-4 py-2.5 flex flex-wrap items-center justify-between gap-3">
-            <div className="flex items-center gap-2.5">
-              <span className="text-lg font-bold tracking-tight">あずけカンペ</span>
-              {source === 'shared' && data ? (
-                <span className="px-2 py-0.5 rounded bg-slate-700 text-slate-200 text-xs font-medium">
-                  共有ビュー
-                </span>
-              ) : null}
-            </div>
-
-            {data ? (
-              <nav
-                role="tablist"
-                aria-label="表示モード切り替え"
-                className="inline-flex items-center rounded-xl bg-slate-900/60 p-1 gap-1"
-              >
-                {tabs.map((tab) => {
-                  const selected = viewMode === tab.mode;
-                  return (
-                    <button
-                      key={tab.mode}
-                      type="button"
-                      role="tab"
-                      aria-selected={selected}
-                      onClick={() => setViewMode(tab.mode)}
-                      className={`inline-flex items-center justify-center gap-1.5 min-h-11 px-3.5 rounded-lg text-sm font-semibold active:scale-[0.98] transition-all ${
-                        selected
-                          ? 'bg-white text-slate-900'
-                          : 'text-slate-200 hover:bg-slate-700/70'
-                      }`}
-                    >
-                      {tab.icon}
-                      <span>{tab.label}</span>
-                    </button>
-                  );
-                })}
-              </nav>
+      <header className="bg-slate-800 text-white print:hidden sticky top-0 z-20 shadow-xs">
+        <div className="max-w-4xl mx-auto px-4 py-2.5 flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5">
+            <span className="text-lg font-bold tracking-tight">あずけカンペ</span>
+            {source === 'shared' && data ? (
+              <span className="px-2 py-0.5 rounded bg-slate-700 text-slate-200 text-xs font-medium">
+                共有ビュー
+              </span>
             ) : null}
           </div>
 
-          {storageError && source === 'draft' ? (
-            <div className="bg-amber-500 text-slate-950 text-xs sm:text-sm font-semibold px-4 py-2 text-center">
-              保存できませんでした（ブラウザの空き容量やプライベートブラウズ設定をご確認ください）
-            </div>
+          {data ? (
+            <nav
+              role="tablist"
+              aria-label="表示モード切り替え"
+              className="inline-flex items-center rounded-xl bg-slate-900/60 p-1 gap-1"
+            >
+              {tabs.map((tab) => {
+                const selected = viewMode === tab.mode;
+                return (
+                  <button
+                    key={tab.mode}
+                    type="button"
+                    role="tab"
+                    aria-selected={selected}
+                    onClick={() => setViewMode(tab.mode)}
+                    className={`inline-flex items-center justify-center gap-1.5 min-h-11 px-3.5 rounded-lg text-sm font-semibold active:scale-[0.98] transition-all ${
+                      selected
+                        ? 'bg-white text-slate-900'
+                        : 'text-slate-200 hover:bg-slate-700/70'
+                    }`}
+                  >
+                    {tab.icon}
+                    <span>{tab.label}</span>
+                  </button>
+                );
+              })}
+            </nav>
           ) : null}
-        </header>
-      ) : null}
+        </div>
 
-      <main className={hideHeader ? '' : 'pb-10 print:pb-0'}>
+        {storageError && source === 'draft' ? (
+          <div className="bg-amber-500 text-slate-950 text-xs sm:text-sm font-semibold px-4 py-2 text-center">
+            保存できませんでした（ブラウザの空き容量やプライベートブラウズ設定をご確認ください）
+          </div>
+        ) : null}
+      </header>
+
+      <main className="pb-10 print:pb-0">
         {shareError ? (
           <div className="max-w-lg mx-auto px-4 py-10 sm:py-14">
             <div className="rounded-2xl bg-red-50 border-2 border-red-500 text-red-950 p-6 space-y-5 shadow-xs">
@@ -397,8 +390,6 @@ export default function App() {
               setViewMode(source === 'draft' ? 'editor' : 'guest')
             }
             backLabel={source === 'draft' ? '編集に戻る' : 'カンペに戻る'}
-            screenshotMode={screenshotMode}
-            onScreenshotModeChange={setScreenshotMode}
           />
         ) : (
           <GuestView

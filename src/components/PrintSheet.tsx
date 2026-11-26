@@ -1,12 +1,18 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useState } from 'react';
 import type { KanpeData } from '../types/kanpe';
+import {
+  buildKanpeImageFilename,
+  generateKanpePngBlob,
+} from '../utils/kanpeImageGenerator';
 import { useToast } from './Toast';
 import {
   AlertTriangleIcon,
-  CameraIcon,
+  DownloadIcon,
   EyeIcon,
+  ImageIcon,
   PencilIcon,
   PrinterIcon,
+  ShareIcon,
   XIcon,
 } from './icons';
 import {
@@ -23,8 +29,295 @@ interface PrintSheetProps {
   data: KanpeData;
   onBack: () => void;
   backLabel: string;
-  screenshotMode: boolean;
-  onScreenshotModeChange: (on: boolean) => void;
+}
+
+interface ImageExportModalProps {
+  data: KanpeData;
+  isOpen: boolean;
+  onClose: () => void;
+}
+
+function ImageExportModal({ data, isOpen, onClose }: ImageExportModalProps) {
+  const { showToast } = useToast();
+  const canIncludeContacts =
+    data.contacts.enabled && hasContactsContent(data.contacts);
+
+  const [includeContacts, setIncludeContacts] = useState(true);
+  const [status, setStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>(
+    'idle',
+  );
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [file, setFile] = useState<File | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string>('');
+  const [retryToken, setRetryToken] = useState(0);
+
+  useEffect(() => {
+    if (isOpen) {
+      setIncludeContacts(true);
+    }
+  }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) {
+      return;
+    }
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+
+    const handleKeyDown = (e: globalThis.KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.body.style.overflow = prevOverflow;
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isOpen, onClose]);
+
+  useEffect(() => {
+    if (!isOpen) {
+      setStatus('idle');
+      setPreviewUrl(null);
+      setFile(null);
+      setErrorMessage('');
+      return;
+    }
+
+    let cancelled = false;
+    let createdUrl: string | null = null;
+
+    setStatus('loading');
+    setPreviewUrl(null);
+    setFile(null);
+    setErrorMessage('');
+
+    generateKanpePngBlob(data, {
+      includeContacts: canIncludeContacts && includeContacts,
+    })
+      .then((blob) => {
+        if (cancelled) {
+          return;
+        }
+        const url = URL.createObjectURL(blob);
+        createdUrl = url;
+        const generatedFile = new File([blob], buildKanpeImageFilename(data), {
+          type: 'image/png',
+        });
+        setPreviewUrl(url);
+        setFile(generatedFile);
+        setStatus('ready');
+      })
+      .catch((err: unknown) => {
+        if (cancelled) {
+          return;
+        }
+        setErrorMessage(
+          err instanceof Error ? err.message : '画像の生成に失敗しました',
+        );
+        setStatus('error');
+      });
+
+    return () => {
+      cancelled = true;
+      if (createdUrl) {
+        URL.revokeObjectURL(createdUrl);
+      }
+    };
+  }, [isOpen, data, includeContacts, canIncludeContacts, retryToken]);
+
+  if (!isOpen) {
+    return null;
+  }
+
+  let canShareFile = false;
+  if (
+    file &&
+    typeof navigator !== 'undefined' &&
+    typeof navigator.share === 'function' &&
+    typeof navigator.canShare === 'function'
+  ) {
+    try {
+      canShareFile = navigator.canShare({ files: [file] });
+    } catch {
+      canShareFile = false;
+    }
+  }
+
+  const handleShare = async () => {
+    if (!file) {
+      return;
+    }
+    try {
+      await navigator.share({ files: [file], title: 'あずけカンペ' });
+    } catch (err: unknown) {
+      if (
+        (err instanceof DOMException && err.name === 'AbortError') ||
+        (typeof err === 'object' &&
+          err !== null &&
+          'name' in err &&
+          (err as { name?: string }).name === 'AbortError')
+      ) {
+        return;
+      }
+      showToast('共有できませんでした。「画像を保存（PNG）」をお試しください', 'info');
+    }
+  };
+
+  const handleDownload = () => {
+    if (!previewUrl || !file) {
+      return;
+    }
+    const anchor = document.createElement('a');
+    anchor.href = previewUrl;
+    anchor.download = file.name;
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+    showToast('画像を保存しました');
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-50 print:hidden flex items-end sm:items-center justify-center bg-slate-950/60 p-0 sm:p-4"
+      onClick={onClose}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="image-export-modal-title"
+        onClick={(e) => e.stopPropagation()}
+        className="w-full sm:max-w-lg max-h-[90dvh] overflow-y-auto rounded-t-3xl sm:rounded-2xl bg-white text-stone-900 shadow-xl p-5 sm:p-6 space-y-4"
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex items-center gap-2.5">
+            <span className="inline-flex items-center justify-center w-10 h-10 rounded-xl bg-emerald-100 text-emerald-800 shrink-0">
+              <ImageIcon className="w-5 h-5" />
+            </span>
+            <div>
+              <h2
+                id="image-export-modal-title"
+                className="text-lg font-bold text-stone-900"
+              >
+                1枚の画像として保存
+              </h2>
+              <p className="text-xs text-stone-500">
+                LINEでそのまま送れるスマホ向け縦長PNGを作成します
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="画像保存モーダルを閉じる"
+            className="inline-flex items-center justify-center min-h-11 min-w-11 rounded-xl text-stone-500 hover:bg-stone-100 transition-colors"
+          >
+            <XIcon className="w-5 h-5" />
+          </button>
+        </div>
+
+        {canIncludeContacts ? (
+          <div className="rounded-xl border border-stone-200 bg-stone-50 p-3.5">
+            <div className="flex items-center justify-between gap-3">
+              <div className="space-y-0.5">
+                <span className="block text-sm font-bold text-stone-900">
+                  緊急連絡先を画像に含める
+                </span>
+                <p className="text-xs text-stone-600 leading-relaxed">
+                  LINE等へそのまま送る場合はON、別途伝える場合はOFFにできます。
+                </p>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={includeContacts}
+                aria-label="緊急連絡先を画像に含める"
+                onClick={() => setIncludeContacts((prev) => !prev)}
+                className={`relative inline-flex items-center min-h-11 min-w-16 px-1.5 rounded-full transition-colors shrink-0 ${
+                  includeContacts ? 'bg-slate-800' : 'bg-stone-300'
+                }`}
+              >
+                <span
+                  className={`inline-block w-7 h-7 rounded-full bg-white shadow-xs transition-transform ${
+                    includeContacts ? 'translate-x-6' : 'translate-x-0'
+                  }`}
+                />
+              </button>
+            </div>
+          </div>
+        ) : null}
+
+        {status === 'loading' ? (
+          <div className="py-12 flex flex-col items-center justify-center gap-3 text-stone-600">
+            <span
+              aria-hidden="true"
+              className="w-10 h-10 rounded-full border-4 border-stone-200 border-t-emerald-700 animate-spin motion-reduce:animate-none"
+            />
+            <p className="text-sm font-semibold">1枚の画像を作成しています…</p>
+          </div>
+        ) : status === 'error' ? (
+          <div className="rounded-xl border border-red-300 bg-red-50 text-red-900 p-4 space-y-3">
+            <div className="flex items-start gap-2.5">
+              <AlertTriangleIcon className="w-5 h-5 text-red-600 shrink-0 mt-0.5" />
+              <div className="space-y-1 text-sm">
+                <p className="font-bold">画像を作成できませんでした</p>
+                <p className="text-xs text-red-800">{errorMessage}</p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setRetryToken((prev) => prev + 1)}
+              className="w-full min-h-11 px-4 rounded-xl bg-red-700 text-white text-sm font-bold hover:bg-red-800 active:scale-[0.98] transition-all"
+            >
+              もう一度試す
+            </button>
+          </div>
+        ) : status === 'ready' && previewUrl ? (
+          <div className="space-y-3">
+            <p className="text-xs text-stone-600 bg-stone-50 rounded-xl px-3 py-2 leading-relaxed">
+              スマホでうまく保存できない場合は、下の画像を長押しして保存できます
+            </p>
+
+            <div className="max-h-[50dvh] overflow-y-auto rounded-xl border border-stone-200 bg-stone-100 p-2">
+              <img
+                src={previewUrl}
+                alt="あずけカンペの画像プレビュー"
+                className="w-full h-auto rounded-lg shadow-xs"
+              />
+            </div>
+
+            <div className="flex flex-col gap-2.5 pt-1">
+              {canShareFile ? (
+                <button
+                  type="button"
+                  onClick={handleShare}
+                  className="w-full inline-flex items-center justify-center gap-2 min-h-12 px-5 py-3 rounded-xl bg-emerald-700 text-white text-base font-bold hover:bg-emerald-800 active:scale-[0.98] transition-all"
+                >
+                  <ShareIcon className="w-5 h-5" />
+                  <span>LINE等で送る / 共有</span>
+                </button>
+              ) : null}
+
+              <button
+                type="button"
+                onClick={handleDownload}
+                className={
+                  canShareFile
+                    ? 'w-full inline-flex items-center justify-center gap-2 min-h-12 px-5 py-3 rounded-xl border border-stone-300 bg-white text-stone-800 text-base font-bold hover:bg-stone-50 active:scale-[0.98] transition-all'
+                    : 'w-full inline-flex items-center justify-center gap-2 min-h-12 px-5 py-3 rounded-xl bg-slate-800 text-white text-base font-bold hover:bg-slate-700 active:scale-[0.98] transition-all'
+                }
+              >
+                <DownloadIcon className="w-5 h-5" />
+                <span>画像を保存（PNG）</span>
+              </button>
+            </div>
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
 }
 
 function PrintField({ label, value }: { label: string; value: string }) {
@@ -54,48 +347,9 @@ function formatUpdatedAt(isoString: string): string {
   });
 }
 
-export function PrintSheet({
-  data,
-  onBack,
-  backLabel,
-  screenshotMode,
-  onScreenshotModeChange,
-}: PrintSheetProps) {
+export function PrintSheet({ data, onBack, backLabel }: PrintSheetProps) {
   const { showToast } = useToast();
-  const lastTapRef = useRef<number>(0);
-
-  useEffect(() => {
-    if (!screenshotMode) {
-      return;
-    }
-    const handleKeyDown = (e: globalThis.KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        onScreenshotModeChange(false);
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [screenshotMode, onScreenshotModeChange]);
-
-  const handleEnableScreenshotMode = () => {
-    onScreenshotModeChange(true);
-    showToast('ダブルタップか右下の「戻る」で解除できます', 'info');
-  };
-
-  const handlePaperPointerUp = () => {
-    if (!screenshotMode) {
-      return;
-    }
-    const now = Date.now();
-    if (now - lastTapRef.current < 300) {
-      lastTapRef.current = 0;
-      onScreenshotModeChange(false);
-      return;
-    }
-    lastTapRef.current = now;
-  };
+  const [isImageModalOpen, setIsImageModalOpen] = useState(false);
 
   const allergies = data.safety.allergies.filter(hasText);
   const ngList = data.safety.ngList.filter(hasText);
@@ -239,64 +493,55 @@ export function PrintSheet({
   const twoColumns = leftCards.length > 0 && rightCards.length > 0;
   const updatedText = formatUpdatedAt(data.updatedAt);
 
+  const handleOpenImageModal = () => {
+    if (!hasAnyContent) {
+      showToast('先に編集画面で内容を入力してください', 'info');
+      return;
+    }
+    setIsImageModalOpen(true);
+  };
+
   return (
-    <div
-      className={
-        screenshotMode
-          ? 'min-h-dvh flex justify-center items-start bg-stone-100 px-2 py-4 print:p-0 print:bg-white'
-          : 'max-w-[210mm] mx-auto px-4 py-5 space-y-4 print:p-0 print:max-w-none'
-      }
-    >
-      {!screenshotMode ? (
-        <div className="print:hidden rounded-2xl border border-stone-200 bg-white p-3.5 shadow-xs space-y-2.5">
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={onBack}
-              className="inline-flex items-center justify-center gap-1.5 min-h-11 px-4 rounded-xl border border-stone-300 bg-white text-stone-800 text-sm font-semibold hover:bg-stone-50 active:scale-[0.98] transition-all"
-            >
-              {backLabel.includes('編集') ? (
-                <PencilIcon className="w-4 h-4" />
-              ) : (
-                <EyeIcon className="w-4 h-4" />
-              )}
-              <span>{backLabel}</span>
-            </button>
+    <div className="max-w-[210mm] mx-auto px-4 py-5 space-y-4 print:p-0 print:max-w-none">
+      <div className="print:hidden rounded-2xl border border-stone-200 bg-white p-3.5 shadow-xs space-y-2.5">
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={onBack}
+            className="inline-flex items-center justify-center gap-1.5 min-h-11 px-4 rounded-xl border border-stone-300 bg-white text-stone-800 text-sm font-semibold hover:bg-stone-50 active:scale-[0.98] transition-all"
+          >
+            {backLabel.includes('編集') ? (
+              <PencilIcon className="w-4 h-4" />
+            ) : (
+              <EyeIcon className="w-4 h-4" />
+            )}
+            <span>{backLabel}</span>
+          </button>
 
-            <button
-              type="button"
-              onClick={() => window.print()}
-              className="inline-flex items-center justify-center gap-1.5 min-h-11 px-4 rounded-xl bg-slate-800 text-white text-sm font-bold hover:bg-slate-700 active:scale-[0.98] transition-all"
-            >
-              <PrinterIcon className="w-4 h-4" />
-              <span>印刷 / PDF保存</span>
-            </button>
+          <button
+            type="button"
+            onClick={() => window.print()}
+            className="inline-flex items-center justify-center gap-1.5 min-h-11 px-4 rounded-xl bg-slate-800 text-white text-sm font-bold hover:bg-slate-700 active:scale-[0.98] transition-all"
+          >
+            <PrinterIcon className="w-4 h-4" />
+            <span>印刷 / PDF保存</span>
+          </button>
 
-            <button
-              type="button"
-              aria-pressed={screenshotMode}
-              onClick={handleEnableScreenshotMode}
-              className="inline-flex items-center justify-center gap-1.5 min-h-11 px-4 rounded-xl border border-slate-300 bg-slate-50 text-slate-800 text-sm font-semibold hover:bg-slate-100 active:scale-[0.98] transition-all"
-            >
-              <CameraIcon className="w-4 h-4" />
-              <span>スクショ専用モード（ボタン非表示）</span>
-            </button>
-          </div>
-          <p className="text-xs text-stone-500">
-            A4縦1枚に収まるように自動でレイアウトされます。スマホでLINEに送るならスクショ専用モードが便利です。
-          </p>
+          <button
+            type="button"
+            onClick={handleOpenImageModal}
+            className="inline-flex items-center justify-center gap-1.5 min-h-11 px-4 rounded-xl bg-emerald-700 text-white text-sm font-bold hover:bg-emerald-800 active:scale-[0.98] transition-all"
+          >
+            <ImageIcon className="w-4 h-4" />
+            <span>1枚の画像として保存</span>
+          </button>
         </div>
-      ) : null}
+        <p className="text-xs text-stone-500">
+          A4縦1枚に収まるように印刷できます。スマホでLINEに送るなら『1枚の画像として保存』が便利です。
+        </p>
+      </div>
 
-      <article
-        onPointerUp={handlePaperPointerUp}
-        onDoubleClick={() => {
-          if (screenshotMode) {
-            onScreenshotModeChange(false);
-          }
-        }}
-        className="bg-white text-stone-900 w-full max-w-[210mm] mx-auto rounded-2xl border border-stone-200 shadow-sm p-5 sm:p-7 space-y-3.5 print:max-w-none print:p-0 print:border-0 print:shadow-none print:rounded-none print:text-[10pt] print:leading-snug"
-      >
+      <article className="bg-white text-stone-900 w-full max-w-[210mm] mx-auto rounded-2xl border border-stone-200 shadow-sm p-5 sm:p-7 space-y-3.5 print:max-w-none print:p-0 print:border-0 print:shadow-none print:rounded-none print:text-[10pt] print:leading-snug">
         <header className="bg-slate-800 text-white rounded-xl px-4 py-3 flex flex-wrap items-center justify-between gap-3">
           <div className="min-w-0">
             <p className="text-[11px] font-semibold tracking-wider text-slate-300">
@@ -384,16 +629,11 @@ export function PrintSheet({
         </footer>
       </article>
 
-      {screenshotMode ? (
-        <button
-          type="button"
-          onClick={() => onScreenshotModeChange(false)}
-          className="fixed bottom-4 right-4 z-30 print:hidden inline-flex items-center gap-1.5 min-h-11 px-4 rounded-full bg-slate-900/35 text-white backdrop-blur-sm text-sm font-semibold shadow-md hover:bg-slate-900/80 active:scale-[0.98] transition-all"
-        >
-          <XIcon className="w-4 h-4" />
-          <span>戻る</span>
-        </button>
-      ) : null}
+      <ImageExportModal
+        data={data}
+        isOpen={isImageModalOpen}
+        onClose={() => setIsImageModalOpen(false)}
+      />
     </div>
   );
 }
