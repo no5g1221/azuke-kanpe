@@ -1,4 +1,4 @@
-import { type ReactNode, useCallback, useEffect, useState } from 'react';
+import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
 import { EditorView } from './components/EditorView';
 import { GuestView } from './components/GuestView';
 import { PrintSheet } from './components/PrintSheet';
@@ -57,10 +57,32 @@ export default function App() {
   const [shareError, setShareError] = useState<string | null>(null);
   const [checksKey, setChecksKey] = useState<string>('draft-preview');
   const [storageError, setStorageError] = useState<boolean>(false);
+  const syncRequestIdRef = useRef(0);
 
-  const syncFromLocation = useCallback(() => {
+  const syncFromLocation = useCallback(async () => {
+    const requestId = ++syncRequestIdRef.current;
     const hash = window.location.hash;
-    const decoded = decodeKanpeFromHash(hash);
+
+    if (getHashPayload(hash) === null) {
+      const draft = loadDraft();
+      setShareError(null);
+      setChecksKey('draft-preview');
+      if (draft) {
+        setData(draft);
+        setSource('draft');
+        setViewMode('editor');
+      } else {
+        setData(null);
+        setSource(null);
+        setViewMode('editor');
+      }
+      return;
+    }
+
+    const decoded = await decodeKanpeFromHash(hash);
+    if (requestId !== syncRequestIdRef.current) {
+      return;
+    }
 
     if (decoded === null) {
       const draft = loadDraft();
@@ -94,10 +116,14 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    syncFromLocation();
-    window.addEventListener('hashchange', syncFromLocation);
+    void syncFromLocation();
+    const handleHashChange = () => {
+      void syncFromLocation();
+    };
+    window.addEventListener('hashchange', handleHashChange);
     return () => {
-      window.removeEventListener('hashchange', syncFromLocation);
+      syncRequestIdRef.current += 1;
+      window.removeEventListener('hashchange', handleHashChange);
     };
   }, [syncFromLocation]);
 
@@ -182,7 +208,7 @@ export default function App() {
       '',
       `${window.location.pathname}${window.location.search}`,
     );
-    syncFromLocation();
+    void syncFromLocation();
   };
 
   const tabs = source === 'shared' ? SHARED_TABS : DRAFT_TABS;

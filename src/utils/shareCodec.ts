@@ -6,7 +6,8 @@ import {
   normalizeKanpeData,
 } from '../types/kanpe';
 
-const HASH_PREFIX = '#d=';
+const HASH_PREFIX_RAW = '#d=';
+const HASH_PREFIX_COMPRESSED = '#z=';
 
 const PRESET_TO_SHORT: Record<AgePreset, 'i' | 't'> = {
   infant: 'i',
@@ -103,16 +104,33 @@ function expandStringFields(
   return out;
 }
 
-function toCompactFlag(value: boolean): 1 | 0 {
-  return value ? 1 : 0;
-}
-
-function fromCompactFlag(value: unknown): boolean | undefined {
-  if (value === 1 || value === true) {
-    return true;
-  }
+function fromCompactFlag(value: unknown): boolean {
   if (value === 0 || value === false) {
     return false;
+  }
+  return true;
+}
+
+function encodeShortTimestamp(isoString: string): string {
+  const ms = Date.parse(isoString);
+  if (Number.isNaN(ms) || ms < 0) {
+    return '';
+  }
+  return Math.floor(ms / 60000).toString(36);
+}
+
+function decodeShortTimestamp(raw: unknown): unknown {
+  if (typeof raw !== 'string' || raw.length === 0) {
+    return undefined;
+  }
+  if (raw.includes('-') || raw.includes(':')) {
+    return raw;
+  }
+  if (/^[0-9a-z]+$/i.test(raw)) {
+    const minutes = Number.parseInt(raw, 36);
+    if (Number.isFinite(minutes) && minutes >= 0) {
+      return new Date(minutes * 60000).toISOString();
+    }
   }
   return undefined;
 }
@@ -120,33 +138,56 @@ function fromCompactFlag(value: unknown): boolean | undefined {
 function compactKanpe(data: KanpeData): Record<string, unknown> {
   const pr = compactStringFields(data.profile, PROFILE_KEY_MAP);
 
-  const s: Record<string, unknown> = { e: toCompactFlag(data.safety.enabled) };
-  if (data.safety.allergies.length > 0) {
-    s.a = data.safety.allergies;
-  }
-  if (data.safety.ngList.length > 0) {
-    s.n = data.safety.ngList;
-  }
-  setIfNonEmptyString(s, 'm', data.safety.medicalNote);
-
-  const f: Record<string, unknown> = {
-    e: toCompactFlag(data.feeding.enabled),
-    m: FEEDING_TO_SHORT[data.feeding.mode],
-    ...compactStringFields(
-      {
-        milkAmount: data.feeding.milkAmount,
-        milkHowTo: data.feeding.milkHowTo,
-        foodRules: data.feeding.foodRules,
-        snackRules: data.feeding.snackRules,
-        waterNote: data.feeding.waterNote,
-      },
-      FEEDING_STR_KEY_MAP,
-    ),
+  const root: Record<string, unknown> = {
+    v: KANPE_VERSION,
+    p: PRESET_TO_SHORT[data.preset],
   };
 
-  const c: Record<string, unknown> = {
-    e: toCompactFlag(data.care.enabled),
-    ...compactStringFields(
+  const shortUpdatedAt = encodeShortTimestamp(data.updatedAt);
+  setIfNonEmptyString(root, 'u', shortUpdatedAt);
+
+  if (Object.keys(pr).length > 0) {
+    root.pr = pr;
+  }
+
+  if (!data.safety.enabled) {
+    root.s = { e: 0 };
+  } else {
+    const s: Record<string, unknown> = {};
+    if (data.safety.allergies.length > 0) {
+      s.a = data.safety.allergies;
+    }
+    if (data.safety.ngList.length > 0) {
+      s.n = data.safety.ngList;
+    }
+    setIfNonEmptyString(s, 'm', data.safety.medicalNote);
+    if (Object.keys(s).length > 0) {
+      root.s = s;
+    }
+  }
+
+  if (!data.feeding.enabled) {
+    root.f = { e: 0 };
+  } else {
+    root.f = {
+      m: FEEDING_TO_SHORT[data.feeding.mode],
+      ...compactStringFields(
+        {
+          milkAmount: data.feeding.milkAmount,
+          milkHowTo: data.feeding.milkHowTo,
+          foodRules: data.feeding.foodRules,
+          snackRules: data.feeding.snackRules,
+          waterNote: data.feeding.waterNote,
+        },
+        FEEDING_STR_KEY_MAP,
+      ),
+    };
+  }
+
+  if (!data.care.enabled) {
+    root.c = { e: 0 };
+  } else {
+    const c = compactStringFields(
       {
         sleepHowTo: data.care.sleepHowTo,
         diaperToilet: data.care.diaperToilet,
@@ -154,17 +195,27 @@ function compactKanpe(data: KanpeData): Record<string, unknown> {
         itemLocations: data.care.itemLocations,
       },
       CARE_KEY_MAP,
-    ),
-  };
-
-  const cl: Record<string, unknown> = { e: toCompactFlag(data.checklist.enabled) };
-  if (data.checklist.items.length > 0) {
-    cl.i = data.checklist.items.map((item) => [item.id, item.text]);
+    );
+    if (Object.keys(c).length > 0) {
+      root.c = c;
+    }
   }
 
-  const ct: Record<string, unknown> = {
-    e: toCompactFlag(data.contacts.enabled),
-    ...compactStringFields(
+  if (!data.checklist.enabled) {
+    root.cl = { e: 0 };
+  } else {
+    const items = data.checklist.items
+      .filter((item) => item.text.trim().length > 0)
+      .map((item) => item.text);
+    if (items.length > 0) {
+      root.cl = { i: items };
+    }
+  }
+
+  if (!data.contacts.enabled) {
+    root.ct = { e: 0 };
+  } else {
+    const ct = compactStringFields(
       {
         primaryName: data.contacts.primaryName,
         primaryPhone: data.contacts.primaryPhone,
@@ -174,21 +225,10 @@ function compactKanpe(data: KanpeData): Record<string, unknown> {
         hospitalPhone: data.contacts.hospitalPhone,
       },
       CONTACTS_KEY_MAP,
-    ),
-  };
-
-  const root: Record<string, unknown> = {
-    v: KANPE_VERSION,
-    p: PRESET_TO_SHORT[data.preset],
-    s,
-    f,
-    c,
-    cl,
-    ct,
-  };
-  setIfNonEmptyString(root, 'u', data.updatedAt);
-  if (Object.keys(pr).length > 0) {
-    root.pr = pr;
+    );
+    if (Object.keys(ct).length > 0) {
+      root.ct = ct;
+    }
   }
 
   return root;
@@ -204,21 +244,24 @@ function expandKanpe(raw: Record<string, unknown>): Record<string, unknown> {
 
   const expandedItems: Array<{ id: string; text: string }> = [];
   if (Array.isArray(rawCl.i)) {
-    for (const pair of rawCl.i) {
-      if (
-        Array.isArray(pair) &&
-        pair.length >= 2 &&
-        typeof pair[0] === 'string' &&
-        typeof pair[1] === 'string'
+    for (let index = 0; index < rawCl.i.length; index += 1) {
+      const entry = rawCl.i[index];
+      if (typeof entry === 'string') {
+        expandedItems.push({ id: `item-${index}`, text: entry });
+      } else if (
+        Array.isArray(entry) &&
+        entry.length >= 2 &&
+        typeof entry[0] === 'string' &&
+        typeof entry[1] === 'string'
       ) {
-        expandedItems.push({ id: pair[0], text: pair[1] });
+        expandedItems.push({ id: entry[0], text: entry[1] });
       }
     }
   }
 
   return {
     version: raw.v,
-    updatedAt: raw.u,
+    updatedAt: decodeShortTimestamp(raw.u),
     preset: typeof raw.p === 'string' ? SHORT_TO_PRESET[raw.p] : undefined,
     profile: expandStringFields(rawPr, PROFILE_KEY_MAP),
     safety: {
@@ -269,10 +312,26 @@ function base64UrlToBytes(payload: string): Uint8Array {
   return bytes;
 }
 
-export function encodeKanpeToHash(
+async function compressDeflateRaw(bytes: Uint8Array): Promise<Uint8Array> {
+  const stream = new Blob([new Uint8Array(bytes)])
+    .stream()
+    .pipeThrough(new CompressionStream('deflate-raw'));
+  const buffer = await new Response(stream).arrayBuffer();
+  return new Uint8Array(buffer);
+}
+
+async function decompressDeflateRaw(bytes: Uint8Array): Promise<Uint8Array> {
+  const stream = new Blob([new Uint8Array(bytes)])
+    .stream()
+    .pipeThrough(new DecompressionStream('deflate-raw'));
+  const buffer = await new Response(stream).arrayBuffer();
+  return new Uint8Array(buffer);
+}
+
+export async function encodeKanpeToHash(
   data: KanpeData,
   options: { includeContacts: boolean },
-): string {
+): Promise<string> {
   const normalized = normalizeKanpeData(data);
   const prepared: KanpeData = options.includeContacts
     ? normalized
@@ -292,23 +351,45 @@ export function encodeKanpeToHash(
   const compact = compactKanpe(prepared);
   const json = JSON.stringify(compact);
   const bytes = new TextEncoder().encode(json);
-  return `${HASH_PREFIX}${bytesToBase64Url(bytes)}`;
+  const rawHash = `${HASH_PREFIX_RAW}${bytesToBase64Url(bytes)}`;
+
+  if (typeof globalThis.CompressionStream === 'function') {
+    try {
+      const compressed = await compressDeflateRaw(bytes);
+      const compressedHash = `${HASH_PREFIX_COMPRESSED}${bytesToBase64Url(compressed)}`;
+      if (compressedHash.length < rawHash.length) {
+        return compressedHash;
+      }
+    } catch {
+      // Fall back to uncompressed format if compression fails
+    }
+  }
+
+  return rawHash;
 }
 
 export function getHashPayload(hash: string): string | null {
-  if (!hash.startsWith(HASH_PREFIX)) {
-    return null;
+  if (hash.startsWith(HASH_PREFIX_COMPRESSED)) {
+    return hash.slice(HASH_PREFIX_COMPRESSED.length);
   }
-  return hash.slice(HASH_PREFIX.length);
+  if (hash.startsWith(HASH_PREFIX_RAW)) {
+    return hash.slice(HASH_PREFIX_RAW.length);
+  }
+  return null;
 }
 
-export function decodeKanpeFromHash(
+export async function decodeKanpeFromHash(
   hash: string,
-): { ok: true; data: KanpeData } | { ok: false; error: string } | null {
-  const payload = getHashPayload(hash);
-  if (payload === null) {
+): Promise<{ ok: true; data: KanpeData } | { ok: false; error: string } | null> {
+  const isCompressed = hash.startsWith(HASH_PREFIX_COMPRESSED);
+  const isRaw = hash.startsWith(HASH_PREFIX_RAW);
+  if (!isCompressed && !isRaw) {
     return null;
   }
+
+  const payload = isCompressed
+    ? hash.slice(HASH_PREFIX_COMPRESSED.length)
+    : hash.slice(HASH_PREFIX_RAW.length);
 
   if (payload.length === 0) {
     return {
@@ -331,8 +412,16 @@ export function decodeKanpeFromHash(
     };
   }
 
+  if (isCompressed && typeof globalThis.DecompressionStream !== 'function') {
+    return {
+      ok: false,
+      error: 'お使いのブラウザはこの共有リンクの形式に対応していません。最新のブラウザで開き直してください。',
+    };
+  }
+
   try {
-    const bytes = base64UrlToBytes(payload);
+    const rawBytes = base64UrlToBytes(payload);
+    const bytes = isCompressed ? await decompressDeflateRaw(rawBytes) : rawBytes;
     const json = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
     const parsed: unknown = JSON.parse(json);
 

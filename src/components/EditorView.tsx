@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
+import { type ReactNode, useEffect, useRef, useState } from 'react';
 import {
   type FeedingMode,
   INFANT_SAMPLE_KANPE,
@@ -280,15 +280,40 @@ function ShareModal({ data, isOpen, onClose }: ShareModalProps) {
   const { showToast } = useToast();
   const [includeContacts, setIncludeContacts] = useState(false);
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'fallback'>('idle');
+  const [shareUrl, setShareUrl] = useState('');
+  const [isGenerating, setIsGenerating] = useState(false);
   const urlTextareaRef = useRef<HTMLTextAreaElement>(null);
   const copyTimerRef = useRef<number | null>(null);
 
-  const shareUrl = useMemo(() => {
+  useEffect(() => {
     if (!isOpen) {
-      return '';
+      setShareUrl('');
+      setIsGenerating(false);
+      return;
     }
-    const hash = encodeKanpeToHash(data, { includeContacts });
-    return buildShareUrl(hash);
+
+    let cancelled = false;
+    setIsGenerating(true);
+
+    encodeKanpeToHash(data, { includeContacts })
+      .then((hash) => {
+        if (cancelled) {
+          return;
+        }
+        setShareUrl(buildShareUrl(hash));
+        setIsGenerating(false);
+      })
+      .catch(() => {
+        if (cancelled) {
+          return;
+        }
+        setShareUrl('');
+        setIsGenerating(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, [data, includeContacts, isOpen]);
 
   useEffect(() => {
@@ -458,7 +483,9 @@ function ShareModal({ data, isOpen, onClose }: ShareModalProps) {
         <div className="space-y-2">
           <div className="flex items-center justify-between text-xs text-stone-500">
             <span className="font-semibold text-stone-700">共有用 URL</span>
-            <span>文字数：{shareUrl.length}文字</span>
+            <span>
+              {isGenerating ? '生成中…' : `文字数：${shareUrl.length}文字`}
+            </span>
           </div>
           <textarea
             ref={urlTextareaRef}
@@ -469,9 +496,9 @@ function ShareModal({ data, isOpen, onClose }: ShareModalProps) {
             onClick={(e) => e.currentTarget.select()}
             className="w-full p-3 rounded-xl border border-stone-300 bg-stone-50 font-mono text-base text-stone-700 break-all resize-none focus:outline-none focus:border-slate-700"
           />
-          {shareUrl.length > 2000 ? (
+          {!isGenerating && shareUrl.length > 1000 ? (
             <p className="text-xs font-medium text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-              URLが長め（{shareUrl.length}文字）です。一部の古いアプリでは途中で切れる場合があります。
+              URLが長め（{shareUrl.length}文字）のため、LINEではタップできるリンクにならない場合があります。リンクにならないときは「印刷 / 画像保存」から1枚の画像として送るのがおすすめです。
             </p>
           ) : null}
         </div>
@@ -479,7 +506,8 @@ function ShareModal({ data, isOpen, onClose }: ShareModalProps) {
         <button
           type="button"
           onClick={handleCopy}
-          className="w-full inline-flex items-center justify-center gap-2 min-h-12 px-5 py-3 rounded-xl bg-emerald-700 text-white text-base font-bold hover:bg-emerald-800 active:bg-emerald-900 active:scale-[0.98] transition-all"
+          disabled={isGenerating || !shareUrl}
+          className="w-full inline-flex items-center justify-center gap-2 min-h-12 px-5 py-3 rounded-xl bg-emerald-700 text-white text-base font-bold hover:bg-emerald-800 active:bg-emerald-900 active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed transition-all"
         >
           {copyState === 'copied' ? (
             <>
